@@ -33,6 +33,9 @@ class UserException(Exception):
         self.text = text
         self.detail = detail
 
+    def __str__(self):
+        return self.text + (f"({self.detail})" if self.detail else "")
+
 
 class UserFileException(UserException):
     """ An exception related to a specific file. """
