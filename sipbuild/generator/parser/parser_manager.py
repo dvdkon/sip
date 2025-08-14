@@ -107,6 +107,19 @@ class ParserManager:
         else:
             klass.is_opaque = True
 
+        # Check if we don't have a duplicate definition (allowed only if one
+        # is a bare declaration).
+        if klass.shadowed_class:
+            if klass.is_opaque:
+                self._scope_stack[-1].scope = klass.shadowed_class
+                for i, klass2 in enumerate(self.spec.classes):
+                    if klass2 == klass:
+                        self.spec.classes[i] = klass.shadowed_class
+                klass = klass.shadowed_class
+            else:
+                self.parser_error(p, symbol,
+                        "the class/struct/union has already been defined")
+
         # Get the Python name and see if it is different to the C++ name.
         py_name = self.get_py_name(klass.iface_file.fq_cpp_name.base_name,
                 annotations)
@@ -368,12 +381,27 @@ class ParserManager:
             fq_cpp_name = ScopedName(fq_cpp_name.base_name)
             scope = None
 
-        klass = self.find_class(p, symbol, iface_file_type, fq_cpp_name)
+        # If an opaque class already exists for this iface_file, simply replace
+        # it. If it is not opaque, replace it with a new class that is marked
+        # as shadowing it.
+        # Later on either the current class decl will be recognized as
+        # redundant and the shadowed class used again, or an error will be
+        # thrown.
+        iface_file = self.find_iface_file(p, symbol, fq_cpp_name, iface_file_type)
+        shadowed_class = None
+        for i, klass in enumerate(self.spec.classes):
+            if (
+                klass.iface_file is iface_file
+                and iface_file_type is not IfaceFileType.NAMESPACE
+                and klass.iface_file.module is not None
+            ):
+                if not klass.is_opaque:
+                    shadowed_class = klass
+                del self.spec.classes[i]
+                break
 
-        # Check it hasn't already been defined.
-        if iface_file_type is not IfaceFileType.NAMESPACE and klass.iface_file.module is not None:
-            self.parser_error(p, symbol,
-                    "the class/struct/union has already been defined")
+        klass = self._find_class_with_iface_file(iface_file)
+        klass.shadowed_class = shadowed_class
 
         # Complete the initialisation.
         klass.scope = scope

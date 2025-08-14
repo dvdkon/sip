@@ -1659,6 +1659,10 @@ class WrappedClass:
     # The visible member functions. (resolver)
     visible_members: list[VisibleMember] = field(default_factory=list)
 
+    # Used only during parsing, a class of the same name declared before and
+    # shadowed by this class' declaration.
+    shadowed_class: Optional["WrappedClass"] = None
+
     def __hash__(self):
         """ Reimplemented so an Argument object can be used as a dict key. """
 
