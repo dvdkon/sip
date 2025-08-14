@@ -160,7 +160,7 @@ def find_iface_file(spec, mod, fq_cpp_name, iface_file_type, error_logger,
         if iff.type is not iface_file_type:
             if iface_file_type is not IfaceFileType.EXCEPTION or iff.type is not IfaceFileType.CLASS:
                 error_logger(
-                        "a class, exception, namespace or mapped type has already been defined with the same name")
+                        f"a class, exception, namespace or mapped type has already been defined with the same name (was {iff.type.name}, now would be {iface_file_type.name})")
 
         # Ignore an external class declared in another module.
         if iface_file_type is IfaceFileType.CLASS and iff.module is not None and iff.module is not mod:
