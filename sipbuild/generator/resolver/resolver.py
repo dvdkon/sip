@@ -1910,6 +1910,10 @@ def _instantiate_mapped_type_template(spec, mod, mapped_type_template, type,
 
     spec.mapped_types.insert(0, mapped_type)
 
+    # Also mark the template arguments as needed
+    for arg in type.definition.types.args:
+        _set_needed_type(arg)
+
     _replace_template_type(mapped_type, type)
 
 
