@@ -1631,8 +1631,7 @@ class WrappedClass:
     # The sub-class base class. (resolver)
     subclass_base: Optional['WrappedClass'] = None
 
-    # The super-classes.  A super-class can only be a template argument in a
-    # class template.
+    # The super-classes.
     superclasses: list[Union[Argument, 'WrappedClass']] = field(default_factory=list)
 
     # The value of /Supertype/ if specified.

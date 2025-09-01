@@ -1935,9 +1935,7 @@ def p_simple_superclass(p):
     if ad.type is not ArgumentType.NONE or len(ad.derefs) != 0 or ad.is_const or ad.is_reference:
         pm.parser_error(p, 1, "super-class list contains an invalid type")
 
-    # Find the actual class.
-    p[0] = pm.find_class(p, 1, IfaceFileType.CLASS, ad.definition,
-            tmpl_arg=pm.parsing_template)
+    p[0] = Argument(ArgumentType.DEFINED, definition=p[1], source_location=pm.get_source_location(p, 1))
 
 
 def p_opt_class_definition(p):

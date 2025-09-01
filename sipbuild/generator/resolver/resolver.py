@@ -66,6 +66,8 @@ def resolve(spec, modules):
         if klass.iface_file.fq_cpp_name.base_name == 'QObject':
             klass.is_qobject = True
 
+    _resolve_superclasses(spec, error_log)
+
     # The class list has the main module's classes at the front and the ones
     # from the module at the most nested %Import at the end.  Set the MRO for
     # each class and re-order the list of classes so that no class appears
@@ -179,6 +181,22 @@ def resolve(spec, modules):
 
     # Raise an exception for any errors.
     error_log.as_exception()
+
+
+def _resolve_superclasses(spec, error_log):
+    """ Resolve all classes' superclasses from Argument to WrappedClass. """
+
+    for klass in spec.classes:
+        for i, superclass in enumerate(klass.superclasses):
+            _resolve_type(
+                spec, klass.iface_file.module, klass.scope, superclass, error_log)
+            if superclass.type is ArgumentType.NONE:
+                # An error has happened, the superclass couldn't be found.
+                # _resolve_type has already logged an error, so proceed
+                # without the superclasses.
+                klass.superclasses = []
+                break
+            klass.superclasses[i] = superclass.definition
 
 
 def _resolve_module(spec, mod, error_log, final_checks, seen=None):
