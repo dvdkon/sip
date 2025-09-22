@@ -5,7 +5,8 @@
 
 from dataclasses import dataclass, field
 from enum import auto, Enum
-from typing import Any, Optional, Union
+from signal import default_int_handler
+from typing import Any, Optional, TypeVar, Union
 
 from .scoped_name import ScopedName
 from .indexed_lists import (
@@ -988,6 +989,9 @@ class Module:
     # The list of direct imports.
     imports: list['Module'] = field(default_factory=list)
 
+    # List of files to be imported.
+    unrealised_imports: list[str] = field(default_factory=list)
+
     # The code specified by any %InitialisationCode directives.
     initialisation_code: list[CodeBlock] = field(default_factory=list)
 
@@ -1264,6 +1268,9 @@ class Specification:
 
     # The list of classes.
     classes: IndexedClassList = field(default_factory=IndexedClassList)
+
+    # The list of uninstantiated class templates, a tuple of (template args, class)
+    class_templates: list[tuple[Signature, 'WrappedClass']] = field(default_factory=list)
 
     # The list of enums.
     enums: IndexedEnumList = field(default_factory=IndexedEnumList)
@@ -1795,6 +1802,9 @@ class WrappedTypedef:
 
     # Set if the typedef name should not be used in the generated code.
     no_type_name: bool = False
+
+    # The docstring.
+    docstring: Optional['Docstring'] = None
 
 
 @dataclass

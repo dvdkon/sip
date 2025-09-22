@@ -5,6 +5,7 @@
 
 from functools import partial
 import os
+from pathlib import Path
 
 from ...exceptions import deprecated, UserException
 from ...module import get_latest_version
@@ -35,9 +36,14 @@ class ParserManager:
     with state and utility functions.
     """
 
+    # Map of SIP file (absolute path) to result of parsing (see parse())
+    # TODO: Also save tags and features in cache so we don't pull in a
+    # differently parsed module.
+    _parsed_module_cache: dict[str, tuple[Specification, list[Module], list[str]]] = {}
+
     def __init__(self, hex_version, encoding, target_abi, tags,
             disabled_features, protected_is_public, include_dirs, sip_module,
-            is_strict):
+            is_strict, realise_imports=True):
         """ Initialise the manager. """
 
         # Create the lexer.
@@ -50,10 +56,6 @@ class ParserManager:
 
         # This is a hack to give p_error() access to the current parser object.
         rules.parser = self._parser
-
-        # The list of class templates.  Each element is a 2-tuple of the
-        # template arguments (as a Signature instance) and the class itself.
-        self.class_templates = []
 
         # Public state.
         self.tags = tags
@@ -88,6 +90,8 @@ class ParserManager:
         self._all_sip_files = []
         self._sip_file = None
         self._sip_files = []
+        self._import_sip_files = []
+        self._realise_imports = realise_imports
 
     def complete_class(self, p, symbol, annotations, has_body):
         """ Complete the definition of the class that is the current scope, pop
@@ -917,9 +921,12 @@ class ParserManager:
             # the same timeline in multiple modules if a module that others
             # depend on is added during the timeline.
             if qualifier.type is not QualifierType.TIME or type is not QualifierType.TIME or (qualifier.module is module and qualifier.timeline == timeline):
-                self.parser_error(p, symbol,
-                        "'{0}' has already been defined as a qualifier".format(
-                                name))
+                ## Don't error out when being imported, since the qualifier may
+                ## or may not be inherited.
+                #if not self._import_sip_files:
+                #    self.parser_error(p, symbol,
+                #            "'{0}' has already been defined as a qualifier".format(
+                #                    name))
 
                 return
 
@@ -1042,7 +1049,7 @@ class ParserManager:
         def clash(thing):
             self.parser_error(p, symbol,
                     "there is already {0} in scope called '{1}'".format(thing,
-                            py_name))
+                            py_name + "\n" + "\n".join("  - " + f[0] for f in reversed(self._file_stack))))
 
         # Check the enums.
         if self.spec.enums.by_scope_and_py_name(self.scope, py_name):
@@ -1470,7 +1477,7 @@ class ParserManager:
         """
 
         # Look for an appropriate class template.
-        for tmpl_names, proto_class in self.class_templates:
+        for tmpl_names, proto_class in self.spec.class_templates:
             if proto_class.iface_file.fq_cpp_name.matches(template.cpp_name, scope=self.scope) and same_template_signature(tmpl_names, template.types):
                 break
         else:
@@ -1510,6 +1517,80 @@ class ParserManager:
             self._unexpected_eof_error()
 
         self._handle_eom()
+
+        self._parsed_module_cache[sip_file] = (self.spec, self.modules, self._sip_files)
+
+        import_queue = list(self.module_state.module.unrealised_imports) \
+                       if self._realise_imports else []
+        all_imported = set()
+        while len(import_queue) > 0:
+            file_to_import = import_queue.pop()
+            if file_to_import in all_imported:
+                continue  # Ignore recursive import
+
+            if file_to_import not in self._parsed_module_cache:
+                print(f"   Importing {file_to_import}")
+                # Make a new parser manager for the imported module
+                pm = ParserManager(
+                    self._hex_version, self._encoding, self.spec.target_abi,
+                    self.tags, self._disabled_features,
+                    self._protected_is_public, self._include_dirs,
+                    self.spec.sip_module, self.spec.is_strict,
+                    realise_imports=False)
+                # Add our qualifiers to the new module
+                # TODO: This is a problem, since different import points will
+                # have different qualifiers!
+                pm.modules[0].qualifiers.extend(self.module_state.module.qualifiers)
+                pm.parse(file_to_import)
+                print(f"    Done with {file_to_import}")
+            else:
+                print(f"    Using import of {file_to_import} from cache")
+
+            assert file_to_import in self._parsed_module_cache, \
+                f"Parsing {file_to_import} did not produce cache entry"
+
+            spec, mods, files = self._parsed_module_cache[file_to_import]
+
+            all_imported.add(file_to_import)
+            import_queue.extend(set(mods[0].unrealised_imports) - all_imported)
+
+            self.modules.extend(mods)
+            self.module_state.module.imports.append(mods[0])
+            self_qual_names = {q.name for q in self.module_state.module.qualifiers}
+            for qual in mods[0].qualifiers:
+                if qual.name not in self_qual_names:
+                    self.module_state.module.qualifiers.append(qual)
+            self._all_sip_files.extend(files)
+
+            for klass in spec.classes:
+                # TODO: Why can we have multiple classes by the same fq_cpp_name?
+                existing = self.spec.classes.by_fq_cpp_name(klass.iface_file.fq_cpp_name)
+                # If the existing class is a forward declaration, replace it.
+                have_existing = False
+                for klass2 in existing:
+                    if klass2.is_opaque:
+                        self.spec.classes.remove(klass2)
+                    else:
+                        have_existing = True
+                if not have_existing:
+                    self.spec.classes.append(klass)
+            self.spec.class_templates.extend(spec.class_templates)
+            for e in spec.enums:
+                if not self.spec.enums.by_fq_cpp_name(e.fq_cpp_name):
+                    self.spec.enums.append(e)
+            self.spec.exceptions.extend(spec.exceptions)
+            self.spec.exported_header_code.extend(spec.exported_header_code)
+            self.spec.exported_type_hint_code.extend(spec.exported_type_hint_code)
+            self.spec.extracts.extend(spec.extracts)
+            self.spec.iface_files.extend(spec.iface_files)
+            self.spec.mapped_type_templates.extend(spec.mapped_type_templates)
+            self.spec.mapped_types.extend(spec.mapped_types)
+            self.spec.typedefs.extend(spec.typedefs)
+            self.spec.variables.extend(spec.variables)
+            self.spec.virtual_error_handlers.extend(spec.virtual_error_handlers)
+            self.spec.virtual_handlers.extend(spec.virtual_handlers)
+
+
         self._error_log.as_exception()
 
         self.spec.c_bindings = bool(self.c_bindings)
@@ -1518,23 +1599,27 @@ class ParserManager:
         self.spec.variables.sort(key=lambda k: k.py_name.name)
 
         # Remove all template classes and anything they contain.
-        template_classes = [k for _, k in self.class_templates]
+        template_classes = [k for _, k in self.spec.class_templates]
 
         for enum in list(self.spec.enums):
             if enum.scope in template_classes:
-                spec.spec.enums.remove(enum)
+                self.spec.enums.remove(enum)
 
         for typedef in list(self.spec.typedefs):
             if typedef.scope in template_classes:
-                spec.spec.typedefs.remove(typedef)
+                self.spec.typedefs.remove(typedef)
 
         for variable in list(self.spec.variables):
             if variable.scope in template_classes:
-                spec.spec.variables.remove(variable)
+                self.spec.variables.remove(variable)
 
+        # Template classes are parsed just as normal classes, so they get an
+        # (unwanted) entry in the spec (if they're not imported).
         for klass in template_classes:
-            self.spec.classes.remove(klass)
-            self.spec.iface_files.remove(klass.iface_file)
+            if klass in self.spec.classes:
+                self.spec.classes.remove(klass)
+            if klass.iface_file in self.spec.iface_files:
+                self.spec.iface_files.remove(klass.iface_file)
 
         # Remove all classes that are only template arguments.
         for klass in self._template_arg_classes:
@@ -1575,6 +1660,9 @@ class ParserManager:
             return
 
         self._handle_eom()
+
+        # Save parsed module into cache
+        self._parsed_module_cache[self.module_state.sip_file] = self.module_state.module
 
         # Inherit any default encoding.
         if self._pending_module_state.default_encoding is None:
@@ -1647,8 +1735,9 @@ class ParserManager:
             return
 
         if new_module:
-            old_module_state = self.module_state
-            self._import_module(sip_file)
+            # Just save the path to file for later realisation at the end of parse()
+            self.module_state.module.unrealised_imports.append(sip_file)
+            return  # No need to continue with the include
         else:
             # This means that the file was %Included rather than %Imported.
             old_module_state = None

@@ -11,11 +11,17 @@ from .specification import (Argument, ArgumentType, FunctionCall,
         ValueType, WrappedClass)
 from .templates import (template_code, template_code_blocks,
         template_expansions, template_string)
-from .utils import append_iface_file, cached_name, normalised_scoped_name
+from .utils import append_iface_file, cached_name, find_iface_file, normalised_scoped_name
 
 
-def instantiate_class(p, symbol, fq_cpp_name, tmpl_names, proto_class,
-            template, py_name, no_type_name, docstring, pm):
+class TemplateInstantiationException(Exception):
+    # TODO: Include some position information?
+    pass
+
+
+def instantiate_class(
+        fq_cpp_name, tmpl_names, proto_class, template, py_name, no_type_name,
+        docstring, spec, module, scope, in_main_module):
     """ Instantiate a class template and return the instantiated class. """
 
     # Create the expansions.
@@ -33,18 +39,20 @@ def instantiate_class(p, symbol, fq_cpp_name, tmpl_names, proto_class,
     i_class.mro = []
     i_class.virtual_overloads = []
     i_class.visible_members = []
-    i_class.py_name = cached_name(pm.spec, py_name)
+    i_class.py_name = cached_name(spec, py_name)
     i_class.template = template
     i_class.no_type_name = no_type_name
 
     # Handle the interface file.
-    i_class.iface_file = pm.find_iface_file(p, symbol, fq_cpp_name,
-            IfaceFileType.CLASS)
-    i_class.iface_file.module = pm.module_state.module
+    def error_logger(text):
+        raise TemplateInstantiationException(text)
+    i_class.iface_file = find_iface_file(spec, module, fq_cpp_name,
+            IfaceFileType.CLASS, error_logger)
+    i_class.iface_file.module = module
 
     used = i_class.iface_file.used
 
-    i_class.iface_file.type_header_code = template_code_blocks(pm.spec, used,
+    i_class.iface_file.type_header_code = template_code_blocks(spec, used,
             proto_class.iface_file.type_header_code, expansions)
 
     # Make a copy of the used list and add the enclosing scope.
@@ -52,19 +60,19 @@ def instantiate_class(p, symbol, fq_cpp_name, tmpl_names, proto_class,
         append_iface_file(i_class.iface_file.used, iface_file)
 
     # Include any scope header code.
-    i_class.scope = pm.scope
+    i_class.scope = scope
 
     if i_class.scope is not None:
         i_class.iface_file.type_header_code.extend(
                 i_class.scope.iface_file.type_header_code)
 
-    if pm.in_main_module:
+    if in_main_module:
         i_class.iface_file.cpp_name.used = True
         i_class.py_name.used = True
 
     # Handle any type hints.
     if proto_class.type_hints is not None:
-        i_class.type_hints = instantiate_type_hints(pm.spec,
+        i_class.type_hints = instantiate_type_hints(spec,
                 proto_class.type_hints, expansions)
 
     # Handle any flagged enums.
@@ -76,75 +84,76 @@ def instantiate_class(p, symbol, fq_cpp_name, tmpl_names, proto_class,
     i_class.superclasses = []
 
     for superclass in proto_class.superclasses:
-        if isinstance(superclass, WrappedClass):
-            klass = _superclass_from_class(superclass, p, symbol, tmpl_names,
-                    template, pm)
-        else:
-            klass = _superclass_from_template(superclass, p, symbol,
-                    tmpl_names, template, pm)
+        # TODO: Superclasses should be resolved later in resolution process
+        #if isinstance(superclass, WrappedClass):
+        #    klass = _superclass_from_class(superclass, p, symbol, tmpl_names,
+        #            template, pm)
+        #else:
+        #    klass = _superclass_from_template(superclass, p, symbol,
+        #            tmpl_names, template, pm)
 
-        i_class.superclasses.append(klass)
+        i_class.superclasses.append(superclass)
 
     # Handle the enums.
     _instantiate_enums(tmpl_names, proto_class, template, i_class, expansions,
-            pm)
+            spec, in_main_module)
 
     # Handle the variables.
     _instantiate_vars(tmpl_names, proto_class, template, i_class, expansions,
-            pm)
+            spec, in_main_module)
 
     # Handle the typedefs.
-    _instantiate_typedefs(p, symbol, tmpl_names, proto_class, template,
-            i_class, expansions, pm)
+    _instantiate_typedefs(tmpl_names, proto_class, template, i_class,
+                          expansions, spec, in_main_module)
 
     # Handle the ctors.
     i_class.ctors = _instantiate_ctors(tmpl_names, proto_class, template,
-            i_class, expansions, pm)
+            i_class, expansions, spec, in_main_module)
 
     # Handle the methods.
     i_class.members = _instantiate_methods(proto_class.members,
-            i_class.iface_file.module, pm)
+            i_class.iface_file.module, in_main_module)
     i_class.overloads = _instantiate_overloads(proto_class.overloads,
             proto_class.members, i_class.members, tmpl_names, proto_class,
-            template, i_class, expansions, pm)
+            template, i_class, expansions, spec, in_main_module)
 
     # Handle the remaining handwritten code.
-    i_class.bi_get_buffer_code = template_code(pm.spec, used,
+    i_class.bi_get_buffer_code = template_code(spec, used,
             proto_class.bi_get_buffer_code, expansions)
-    i_class.bi_release_buffer_code = template_code(pm.spec, used,
+    i_class.bi_release_buffer_code = template_code(spec, used,
             proto_class.bi_release_buffer_code, expansions)
-    i_class.convert_from_type_code = template_code(pm.spec, used,
+    i_class.convert_from_type_code = template_code(spec, used,
             proto_class.convert_from_type_code, expansions)
-    i_class.convert_to_subclass_code = template_code(pm.spec, used,
+    i_class.convert_to_subclass_code = template_code(spec, used,
             proto_class.convert_to_subclass_code, expansions)
-    i_class.convert_to_type_code = template_code(pm.spec, used,
+    i_class.convert_to_type_code = template_code(spec, used,
             proto_class.convert_to_type_code, expansions)
-    i_class.dealloc_code = template_code_blocks(pm.spec, used,
+    i_class.dealloc_code = template_code_blocks(spec, used,
             proto_class.dealloc_code, expansions)
-    i_class.dtor_virtual_catcher_code = template_code(pm.spec, used,
+    i_class.dtor_virtual_catcher_code = template_code(spec, used,
             proto_class.dtor_virtual_catcher_code, expansions)
-    i_class.finalisation_code = template_code(pm.spec, used,
+    i_class.finalisation_code = template_code(spec, used,
             proto_class.finalisation_code, expansions)
-    i_class.gc_clear_code = template_code(pm.spec, used,
+    i_class.gc_clear_code = template_code(spec, used,
             proto_class.gc_clear_code, expansions)
-    i_class.gc_traverse_code = template_code(pm.spec, used,
+    i_class.gc_traverse_code = template_code(spec, used,
             proto_class.gc_traverse_code, expansions)
-    i_class.instance_code = template_code(pm.spec, used,
+    i_class.instance_code = template_code(spec, used,
             proto_class.instance_code, expansions)
-    i_class.pickle_code = template_code(pm.spec, used, proto_class.pickle_code,
+    i_class.pickle_code = template_code(spec, used, proto_class.pickle_code,
             expansions)
-    i_class.type_code = template_code_blocks(pm.spec, used,
+    i_class.type_code = template_code_blocks(spec, used,
             proto_class.type_code, expansions)
-    i_class.type_hint_code = template_code(pm.spec, used,
+    i_class.type_hint_code = template_code(spec, used,
             proto_class.type_hint_code, expansions)
 
-    pm.spec.classes.insert(0, i_class)
+    spec.classes.insert(0, i_class)
 
     return i_class
 
 
 def _instantiate_argument(proto_arg, proto_class, tmpl_names, template,
-        i_class, expansions, pm):
+        i_class, expansions, spec, in_main_module):
     """ Return an instantiated Argument object. """
 
     # Start with a shallow copy.
@@ -154,8 +163,9 @@ def _instantiate_argument(proto_arg, proto_class, tmpl_names, template,
     if proto_arg.type is ArgumentType.TEMPLATE:
         proto_template = proto_arg.definition
         i_template = copy(proto_template)
-        i_template.types = _instantiate_signature(proto_template.types,
-                proto_class, tmpl_names, template, i_class, expansions, pm)
+        i_template.types = _instantiate_signature(
+                proto_template.types, proto_class, tmpl_names, template,
+                i_class, expansions, spec, in_main_module)
         i_arg.definition = i_template
 
     # Handle any default value.
@@ -165,7 +175,7 @@ def _instantiate_argument(proto_arg, proto_class, tmpl_names, template,
 
     # Handle any type hints.
     if proto_arg.type_hints is not None:
-        i_arg.type_hints = instantiate_type_hints(pm.spec,
+        i_arg.type_hints = instantiate_type_hints(spec,
                 proto_arg.type_hints, expansions)
 
     # Handle arguments that are unscoped names.
@@ -194,7 +204,7 @@ def _instantiate_argument(proto_arg, proto_class, tmpl_names, template,
 
 
 def _instantiate_ctors(tmpl_names, proto_class, template, i_class, expansions,
-        pm):
+        spec, in_main_module):
     """ Return a list of the instantiated ctors of a template class. """
 
     i_ctors = []
@@ -204,8 +214,9 @@ def _instantiate_ctors(tmpl_names, proto_class, template, i_class, expansions,
         # Start with a shallow copy.
         i_ctor = copy(proto_ctor)
 
-        i_ctor.py_signature = _instantiate_signature(proto_ctor.py_signature,
-                proto_class, tmpl_names, template, i_class, expansions, pm,
+        i_ctor.py_signature = _instantiate_signature(
+                proto_ctor.py_signature, proto_class, tmpl_names, template,
+                i_class, expansions, spec, in_main_module,
                 kw_args=proto_ctor.kw_args)
 
         if proto_ctor.cpp_signature is proto_ctor.py_signature:
@@ -213,11 +224,12 @@ def _instantiate_ctors(tmpl_names, proto_class, template, i_class, expansions,
         else:
             i_ctor.cpp_signature = _instantiate_signature(
                     proto_ctor.cpp_signature.cpp_signature, proto_class,
-                    tmpl_names, template, i_class, expansions, pm)
+                    tmpl_names, template, i_class, expansions, spec,
+                    in_main_module)
 
-        i_ctor.method_code = template_code(pm.spec, used,
+        i_ctor.method_code = template_code(spec, used,
                 proto_ctor.method_code, expansions)
-        i_ctor.premethod_code = template_code(pm.spec, used,
+        i_ctor.premethod_code = template_code(spec, used,
                 proto_ctor.premethod_code, expansions)
 
         # Handle the default ctor.
@@ -230,10 +242,10 @@ def _instantiate_ctors(tmpl_names, proto_class, template, i_class, expansions,
 
 
 def _instantiate_enums(tmpl_names, proto_class, template, i_class, expansions,
-        pm):
+        spec, in_main_module):
     """ Instantiate the enums for a template class. """
 
-    for proto_enum in list(pm.spec.enums):
+    for proto_enum in list(spec.enums):
         if proto_enum.scope is not proto_class:
             continue
 
@@ -243,10 +255,10 @@ def _instantiate_enums(tmpl_names, proto_class, template, i_class, expansions,
         if proto_enum.fq_cpp_name is not None:
             i_enum.fq_cpp_name = normalised_scoped_name(proto_enum.fq_cpp_name,
                     i_class)
-            i_enum.cached_fq_cpp_name = cached_name(pm.spec,
+            i_enum.cached_fq_cpp_name = cached_name(spec,
                     str(i_enum.fq_cpp_name))
 
-        if pm.in_main_module:
+        if in_main_module:
             if i_enum.py_name is not None:
                 i_enum.py_name = True
 
@@ -265,10 +277,10 @@ def _instantiate_enums(tmpl_names, proto_class, template, i_class, expansions,
 
             i_enum.members.append(w_member)
 
-        pm.spec.enums.insert(0, i_enum)
+        spec.enums.insert(0, i_enum)
 
 
-def _instantiate_methods(proto_methods, target_module, pm):
+def _instantiate_methods(proto_methods, target_module, in_main_module):
     """ Return a list of the instantiated methods of a template class or enum.
     """
 
@@ -280,7 +292,7 @@ def _instantiate_methods(proto_methods, target_module, pm):
 
         i_method.module = target_module
 
-        if pm.in_main_module:
+        if in_main_module:
             i_method.py_name.used = True
 
         i_methods.append(i_method)
@@ -288,8 +300,9 @@ def _instantiate_methods(proto_methods, target_module, pm):
     return i_methods
 
 
-def _instantiate_overloads(proto_overloads, proto_methods, i_methods,
-        tmpl_names, proto_class, template, i_class, expansions, pm):
+def _instantiate_overloads(
+        proto_overloads, proto_methods, i_methods, tmpl_names, proto_class,
+        template, i_class, expansions, spec, in_main_module):
     """ Return a list of the instantiated overloads of a template class or
     enum.
     """
@@ -308,22 +321,22 @@ def _instantiate_overloads(proto_overloads, proto_methods, i_methods,
 
         i_overload.py_signature = _instantiate_signature(
                 proto_overload.py_signature, proto_class, tmpl_names, template,
-                i_class, expansions, pm, kw_args=proto_overload.kw_args)
+                i_class, expansions, spec, in_main_module, kw_args=proto_overload.kw_args)
 
         if proto_overload.cpp_signature is proto_overload.py_signature:
             i_overload.cpp_signature = i_overload.py_signature
         else:
             i_overload.cpp_signature = _instantiate_signature(
                     proto_overload.cpp_signature.cpp_signature, proto_class,
-                    tmpl_names, template, i_class, expansions, pm)
+                    tmpl_names, template, i_class, expansions, spec, in_main_module)
 
-        i_overload.method_code = template_code(pm.spec, used,
+        i_overload.method_code = template_code(spec, used,
                 proto_overload.method_code, expansions)
-        i_overload.premethod_code = template_code(pm.spec, used,
+        i_overload.premethod_code = template_code(spec, used,
                 proto_overload.premethod_code, expansions)
-        i_overload.virtual_call_code = template_code(pm.spec, used,
+        i_overload.virtual_call_code = template_code(spec, used,
                 proto_overload.virtual_call_code, expansions)
-        i_overload.virtual_catcher_code = template_code(pm.spec, used,
+        i_overload.virtual_catcher_code = template_code(spec, used,
                 proto_overload.virtual_catcher_code, expansions)
 
         i_overloads.append(i_overload)
@@ -332,25 +345,26 @@ def _instantiate_overloads(proto_overloads, proto_methods, i_methods,
 
 
 def _instantiate_signature(proto_signature, proto_class, tmpl_names, template,
-        i_class, expansions, pm, kw_args=KwArgs.NONE):
+        i_class, expansions, spec, in_main_module, kw_args=KwArgs.NONE):
     """ Return an instantiated Signature object. """
 
     i_signature = Signature()
 
     for proto_arg in proto_signature.args:
         i_arg = _instantiate_argument(proto_arg, proto_class, tmpl_names,
-                template, i_class, expansions, pm)
+                template, i_class, expansions, spec, in_main_module)
 
         i_signature.args.append(i_arg)
 
         # Make sure we have the name of any keyword argument.
-        if pm.in_main_module and i_arg.name is not None:
+        if in_main_module and i_arg.name is not None:
             if kw_args is KwArgs.ALL or (kw_args is KwArgs.OPTIONAL and i_arg.default_value is not None):
                 i_arg.name.used = True
 
     if proto_signature.result is not None:
-        i_signature.result = _instantiate_argument(proto_signature.result,
-                proto_class, tmpl_names, template, i_class, expansions, pm)
+        i_signature.result = _instantiate_argument(
+                proto_signature.result, proto_class, tmpl_names, template,
+                i_class, expansions, spec, in_main_module)
 
     return i_signature
 
@@ -374,11 +388,11 @@ def instantiate_type_hints(spec, proto_type_hints, expansions):
             default_value=proto_type_hints.default_value)
 
 
-def _instantiate_typedefs(p, symbol, tmpl_names, proto_class, template,
-        i_class, expansions, pm):
+def _instantiate_typedefs(tmpl_names, proto_class, template, i_class,
+                          expansions, spec, in_main_module):
     """ Instantiate the typedefs of a template class. """
 
-    for proto_typedef in pm.spec.typedefs:
+    for proto_typedef in spec.typedefs:
         if proto_typedef.scope is not proto_class:
             continue
 
@@ -391,9 +405,19 @@ def _instantiate_typedefs(p, symbol, tmpl_names, proto_class, template,
         i_typedef.module = i_class.iface_file.module
 
         i_typedef.type = _instantiate_argument(proto_typedef.type, proto_class,
-                tmpl_names, template, i_class, expansions, pm)
+                tmpl_names, template, i_class, expansions, spec, in_main_module)
 
-        pm.add_typedef(p, symbol, i_typedef)
+        if spec.is_strict:
+            for td in spec.typedefs:
+                if td.fq_cpp_name == i_typedef.fq_cpp_name:
+                    raise TemplateInstantiationException(
+                            "'{0}' has already been defined".format(
+                                    i_typedef.fq_cpp_name))
+
+        # TODO: What about this?
+        # self.module_state.module.nr_typedefs += 1
+
+        spec.typedefs.append(i_typedef)
 
 
 def _instantiate_value(proto_value, expansions):
@@ -418,19 +442,19 @@ def _instantiate_value(proto_value, expansions):
 
 
 def _instantiate_vars(tmpl_names, proto_class, template, i_class, expansions,
-        pm):
+        spec, in_main_module):
     """ Instantiate the enums for a template class. """
 
     used = i_class.iface_file.used
 
-    for proto_var in pm.spec.variables:
+    for proto_var in spec.variables:
         if proto_var.scope is not proto_class:
             continue
 
         # Start with a shallow copy.
         i_var = copy(proto_var)
 
-        if pm.in_main_module:
+        if in_main_module:
             i_var.py_name.used = True
 
         i_var.fq_cpp_name = normalised_scoped_name(proto_var.fq_cpp_name,
@@ -439,16 +463,16 @@ def _instantiate_vars(tmpl_names, proto_class, template, i_class, expansions,
         i_var.module = i_class.iface_file.module
 
         i_var.type = _instantiate_argument(proto_var.type, proto_class,
-                tmpl_names, template, i_class, expansions, pm)
+                tmpl_names, template, i_class, expansions, spec, in_main_module)
 
-        i_var.access_code = template_code(pm.spec, used, proto_var.access_code,
+        i_var.access_code = template_code(spec, used, proto_var.access_code,
                 expansions)
-        i_var.get_code = template_code(pm.spec, used, proto_var.get_code,
+        i_var.get_code = template_code(spec, used, proto_var.get_code,
                 expansions)
-        i_var.set_code = template_code(pm.spec, used, proto_var.set_code,
+        i_var.set_code = template_code(spec, used, proto_var.set_code,
                 expansions)
 
-        pm.spec.variables.append(i_var)
+        spec.variables.append(i_var)
 
 
 def _superclass_from_class(klass, p, symbol, tmpl_names, template, pm):

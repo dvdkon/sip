@@ -237,9 +237,10 @@ class Builder(AbstractBuilder):
         # Generate the code for each set of bindings.
         api_files = []
 
-        for bindings in project.bindings.values():
+        for i, bindings in enumerate(project.bindings.values()):
             project.progress(
-                    "Generating the {0} bindings".format(bindings.name))
+                    " [{1}/{2}] Generating the {0} bindings..."
+                    .format(bindings.name, i, len(project.bindings)))
 
             # Generate the source code.  We would prefer to pass the include
             # directories as an argument to generate but this is a fixed public

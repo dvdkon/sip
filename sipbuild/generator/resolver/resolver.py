@@ -7,7 +7,7 @@
 from copy import copy
 
 from ..error_log import ErrorLog
-from ..instantiations import instantiate_type_hints
+from ..instantiations import instantiate_class, instantiate_type_hints
 from ..python_slots import (is_hash_return_slot, is_int_return_slot,
         is_inplace_number_slot, is_rich_compare_slot, is_ssize_return_slot,
         is_void_return_slot, is_zero_arg_slot)
@@ -65,6 +65,8 @@ def resolve(spec, modules):
         # classes when we set the hierarchy.
         if klass.iface_file.fq_cpp_name.base_name == 'QObject':
             klass.is_qobject = True
+
+    _instantiate_typedef_templates(spec, error_log)
 
     _resolve_superclasses(spec, error_log)
 
@@ -183,6 +185,35 @@ def resolve(spec, modules):
     error_log.as_exception()
 
 
+def _instantiate_typedef_templates(spec, error_log):
+    """
+    Instantiate templated classes which are typedef'd.
+    Currently we only instantiate templates here, not when they are used
+    ad-hoc.
+    """
+
+    for typedef in spec.typedefs:
+        if typedef.type.type is not ArgumentType.TEMPLATE:
+            continue
+        template = typedef.type.definition
+
+        # Look for an appropriate class template.
+        for tmpl_names, proto_class in spec.class_templates:
+            if proto_class.iface_file.fq_cpp_name.matches(template.cpp_name, scope=typedef.scope) \
+                    and same_template_signature(tmpl_names, template.types):
+                break
+        else:
+            # There was no class template to instantiate.
+            continue
+
+        docstring = ""  # TODO: Feed through from parser
+        py_name = typedef.fq_cpp_name.base_name  # TODO: Use or mimick ParserManager.get_py_name
+        in_main_module = True  # TODO?
+        instantiate_class(typedef.fq_cpp_name, tmpl_names, proto_class,
+                          template, py_name, typedef.no_type_name, docstring,
+                          spec, typedef.module, typedef.scope, in_main_module)
+
+
 def _resolve_superclasses(spec, error_log):
     """ Resolve all classes' superclasses from Argument to WrappedClass. """
 
@@ -201,6 +232,8 @@ def _resolve_superclasses(spec, error_log):
 
 def _resolve_module(spec, mod, error_log, final_checks, seen=None):
     """ Resolve a module and the modules it imports. """
+
+    print("Resolving module", mod.fq_py_name)
 
     if seen is None:
         seen = []
@@ -1384,6 +1417,7 @@ def _resolve_py_signature_types(spec, mod, scope, overload, error_log,
                         overload, scope=scope)
 
         elif not _supported_type(scope, overload, arg, error_log, outputs=True):
+            print("D1", overload.cpp_name, arg.type, arg.definition.cpp_name)
             if overload.is_virtual:
                 _log_overload_error(error_log,
                         "argument {0} has an unsupported type for a Python signature - provide a valid type, %MethodCode, %VirtualCatcherCode and a C++ signature".format(

@@ -1771,7 +1771,7 @@ def p_class_template(p):
 
     pm.cpp_only(p, 1, "class templates")
 
-    pm.class_templates.append((p[1], p[2]))
+    pm.spec.class_templates.append((p[1], p[2]))
 
     pm.parsing_template = False
 
@@ -1932,7 +1932,7 @@ def p_simple_superclass(p):
         ad.type = ArgumentType.NONE
         search_typedefs(pm.spec, ad.definition, ad)
 
-    if ad.type is not ArgumentType.NONE or len(ad.derefs) != 0 or ad.is_const or ad.is_reference:
+    if ad.type not in [ArgumentType.NONE, ArgumentType.TEMPLATE] or len(ad.derefs) != 0 or ad.is_const or ad.is_reference:
         pm.parser_error(p, 1, "super-class list contains an invalid type")
 
     p[0] = Argument(ArgumentType.DEFINED, definition=p[1], source_location=pm.get_source_location(p, 1))
@@ -3122,14 +3122,14 @@ def p_typedef_decl(p):
 
     no_type_name = annotations.get('NoTypeName', False)
 
-    # See if we are instantiating a class template.
-    if type.type is ArgumentType.TEMPLATE:
-        instantiated = pm.instantiate_class_template(p, name_symbol,
-                fq_cpp_name, type.definition,
-                pm.get_py_name(cpp_name, annotations), no_type_name, docstring)
+    ## See if we are instantiating a class template.
+    #if type.type is ArgumentType.TEMPLATE:
+    #    instantiated = pm.instantiate_class_template(p, name_symbol,
+    #            fq_cpp_name, type.definition,
+    #            pm.get_py_name(cpp_name, annotations), no_type_name, docstring)
 
-        if instantiated:
-            return
+    #    if instantiated:
+    #        return
 
     # Handle any 'Capsule' annotation.
     if 'Capsule' in annotations:
@@ -3143,7 +3143,7 @@ def p_typedef_decl(p):
 
     pm.add_typedef(p, name_symbol,
             WrappedTypedef(fq_cpp_name, pm.module_state.module, pm.scope, type,
-                    no_type_name=no_type_name))
+                    no_type_name=no_type_name, docstring=docstring))
 
 
 # C/C++ unions. ###############################################################
