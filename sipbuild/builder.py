@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import sys
+import time
 
 from .abstract_builder import AbstractBuilder
 from .distinfo import write_metadata
@@ -238,6 +239,7 @@ class Builder(AbstractBuilder):
         api_files = []
 
         for i, bindings in enumerate(project.bindings.values()):
+            start_time = time.perf_counter()
             project.progress(
                     " [{1}/{2}] Generating the {0} bindings..."
                     .format(bindings.name, i, len(project.bindings)))
@@ -259,6 +261,8 @@ class Builder(AbstractBuilder):
                     buildable.write_configuration(local_bindings_dir)
 
             project.buildables.append(buildable)
+
+            project.progress("   took {0} seconds".format(time.perf_counter() - start_time))
 
         if project.sip_module:
             # Generate the sip.h file for the shared sip module now that we

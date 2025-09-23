@@ -1059,6 +1059,8 @@ class Module:
     # The interface files used by the module.
     used: list[IfaceFile] = field(default_factory=list)
 
+    resolved: bool = False
+
 
 @dataclass
 class Overload:

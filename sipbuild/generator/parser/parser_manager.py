@@ -3,6 +3,7 @@
 # Copyright (c) 2025 Phil Thompson <phil@riverbankcomputing.com>
 
 
+import copy
 from functools import partial
 import os
 from pathlib import Path
@@ -1362,8 +1363,10 @@ class ParserManager:
                 return qualifier
 
         if required:
-            self.parser_error(p, symbol,
-                    "'{0}' is not a known qualifier".format(name))
+            #self.parser_error(p, symbol,
+            #        "'{0}' is not a known qualifier".format(name))
+            # XXX: HACK!
+            pass
 
         return None
 
@@ -1522,14 +1525,15 @@ class ParserManager:
 
         import_queue = list(self.module_state.module.unrealised_imports) \
                        if self._realise_imports else []
-        all_imported = set()
+        all_imported = {sip_file}
         while len(import_queue) > 0:
             file_to_import = import_queue.pop()
             if file_to_import in all_imported:
+                #print(f"  Skipping recursive import of {file_to_import}")
                 continue  # Ignore recursive import
 
             if file_to_import not in self._parsed_module_cache:
-                print(f"   Importing {file_to_import}")
+                #print(f"   Importing {file_to_import}")
                 # Make a new parser manager for the imported module
                 pm = ParserManager(
                     self._hex_version, self._encoding, self.spec.target_abi,
@@ -1542,13 +1546,15 @@ class ParserManager:
                 # have different qualifiers!
                 pm.modules[0].qualifiers.extend(self.module_state.module.qualifiers)
                 pm.parse(file_to_import)
-                print(f"    Done with {file_to_import}")
+                #print(f"    Done with {file_to_import}")
             else:
-                print(f"    Using import of {file_to_import} from cache")
+                #print(f"  Using import of {file_to_import} from cache")
+                pass
 
             assert file_to_import in self._parsed_module_cache, \
                 f"Parsing {file_to_import} did not produce cache entry"
 
+            #spec, mods, files = copy.deepcopy(self._parsed_module_cache[file_to_import])
             spec, mods, files = self._parsed_module_cache[file_to_import]
 
             all_imported.add(file_to_import)
@@ -1565,6 +1571,8 @@ class ParserManager:
             for klass in spec.classes:
                 # TODO: Why can we have multiple classes by the same fq_cpp_name?
                 existing = self.spec.classes.by_fq_cpp_name(klass.iface_file.fq_cpp_name)
+                if len(existing) > 5:
+                    print("Too many classes of name", klass.iface_file.fq_cpp_name)
                 # If the existing class is a forward declaration, replace it.
                 have_existing = False
                 for klass2 in existing:
@@ -1576,8 +1584,17 @@ class ParserManager:
                     self.spec.classes.append(klass)
             self.spec.class_templates.extend(spec.class_templates)
             for e in spec.enums:
-                if not self.spec.enums.by_fq_cpp_name(e.fq_cpp_name):
-                    self.spec.enums.append(e)
+                if e.fq_cpp_name:
+                    if not self.spec.enums.by_fq_cpp_name(e.fq_cpp_name):
+                        self.spec.enums.append(e)
+                else:
+                    if not any(
+                        self.spec.enums.by_scope_and_unscoped_member_py_name(
+                            e.scope, m.py_name
+                        )
+                        for m in e.members
+                    ):
+                        self.spec.enums.append(e)
             self.spec.exceptions.extend(spec.exceptions)
             self.spec.exported_header_code.extend(spec.exported_header_code)
             self.spec.exported_type_hint_code.extend(spec.exported_type_hint_code)
@@ -1585,7 +1602,9 @@ class ParserManager:
             self.spec.iface_files.extend(spec.iface_files)
             self.spec.mapped_type_templates.extend(spec.mapped_type_templates)
             self.spec.mapped_types.extend(spec.mapped_types)
-            self.spec.typedefs.extend(spec.typedefs)
+            for td in spec.typedefs:
+                if not self.spec.typedefs.by_fq_cpp_name(td.fq_cpp_name):
+                    self.spec.typedefs.append(td)
             self.spec.variables.extend(spec.variables)
             self.spec.virtual_error_handlers.extend(spec.virtual_error_handlers)
             self.spec.virtual_handlers.extend(spec.virtual_handlers)

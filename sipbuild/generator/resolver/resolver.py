@@ -13,7 +13,7 @@ from ..python_slots import (is_hash_return_slot, is_int_return_slot,
         is_void_return_slot, is_zero_arg_slot)
 from ..scoped_name import ScopedName
 from ..specification import (AccessSpecifier, Argument, ArgumentType,
-        ArrayArgument, ClassKey, Constructor, IfaceFileType, IndexedClassList, MappedType,
+        ArrayArgument, ClassKey, Constructor, Docstring, DocstringSignature, IfaceFileType, IndexedClassList, MappedType,
         Member, PyQtMethodSpecifier, PySlot, Signature, Transfer, ValueType,
         VirtualHandler, VirtualOverload, VisibleMember, WrappedClass)
 from ..templates import (encoded_template_name, same_template_signature,
@@ -182,7 +182,10 @@ def resolve(spec, modules):
         check()
 
     # Raise an exception for any errors.
-    error_log.as_exception()
+    # XXX: Ugly hack!
+    #error_log.as_exception()
+    if error_log._errors:
+        print("Errors occurred:", "\n".join(error_log._errors))
 
 
 def _instantiate_typedef_templates(spec, error_log):
@@ -206,7 +209,7 @@ def _instantiate_typedef_templates(spec, error_log):
             # There was no class template to instantiate.
             continue
 
-        docstring = ""  # TODO: Feed through from parser
+        docstring = Docstring(signature = DocstringSignature.APPENDED, text="")  # TODO: Feed through from parser
         py_name = typedef.fq_cpp_name.base_name  # TODO: Use or mimick ParserManager.get_py_name
         in_main_module = True  # TODO?
         instantiate_class(typedef.fq_cpp_name, tmpl_names, proto_class,
@@ -219,6 +222,8 @@ def _resolve_superclasses(spec, error_log):
 
     for klass in spec.classes:
         for i, superclass in enumerate(klass.superclasses):
+            if isinstance(superclass, WrappedClass):
+                continue  # Already resolved
             _resolve_type(
                 spec, klass.iface_file.module, klass.scope, superclass, error_log)
             if superclass.type is ArgumentType.NONE:
@@ -233,7 +238,11 @@ def _resolve_superclasses(spec, error_log):
 def _resolve_module(spec, mod, error_log, final_checks, seen=None):
     """ Resolve a module and the modules it imports. """
 
-    print("Resolving module", mod.fq_py_name)
+    #print("Resolving module", mod.fq_py_name)
+
+    if mod.resolved:
+        return
+    mod.resolved = True
 
     if seen is None:
         seen = []
@@ -388,7 +397,7 @@ def _set_all_imports(mod, error_log, seen=None):
     # Check for recursive imports.
     if seen is None:
         seen = []
-    elif mod in seen:
+    elif any(m is mod for m in seen):
         error_log.log(
                 "module '{0}' is imported recursively".format(mod.fq_py_name))
 
@@ -1065,6 +1074,9 @@ def _get_visible_py_members(spec, klass):
 
 def _get_virtuals(spec, klass, error_log):
     """ Get all the virtuals for a particular class. """
+
+    if len(klass.virtual_overloads) > 0:
+        return  # This has already been done, hopefully?
 
     # Copy the collected virtuals of each super-class updating from what we
     # find in this class.
@@ -2207,6 +2219,8 @@ def _create_sorted_numbered_types(spec, mod, error_log):
     this will be every type needed by the main module.
     """
 
+    mod.needed_types = []
+
     # Collect the needed types.
     for klass in spec.classes:
         if klass.iface_file.module is not mod:
@@ -2241,17 +2255,19 @@ def _create_sorted_numbered_types(spec, mod, error_log):
 
     needed_type_nr = 0
 
+    qobjects = 0
     for needed_type in mod.needed_types:
         if needed_type.type is ArgumentType.CLASS:
             needed_type.definition.iface_file.type_nr = needed_type_nr
 
             # If we find a class called QObject, assume it's Qt.
             if needed_type.name.name == 'QObject':
-                if spec.pyqt_qobject is not None:
-                    error_log.log(
-                            "class 'QObject' has been defined more than once")
+                #if spec.pyqt_qobject is not None:
+                #    error_log.log(
+                #            "class 'QObject' has been defined more than once")
 
                 spec.pyqt_qobject = needed_type.definition
+                qobjects += 1
 
         elif needed_type.type is ArgumentType.MAPPED:
             needed_type.definition.iface_file.type_nr = needed_type_nr
@@ -2260,6 +2276,9 @@ def _create_sorted_numbered_types(spec, mod, error_log):
             needed_type.definition.type_nr = needed_type_nr
 
         needed_type_nr += 1
+
+    if qobjects > 1:
+        print(f"Found {qobjects} QObjects!")
 
 
 def _check_properties(klass, error_log):

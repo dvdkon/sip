@@ -4,6 +4,7 @@
 
 
 from collections import defaultdict
+import copy
 from typing import TypeVar, TYPE_CHECKING
 
 from .scoped_name import ScopedName
@@ -87,6 +88,12 @@ class IndexedList(list[_T]):
         self._index_remove(self[i])
         super().__delitem__(i)
 
+    def __deepcopy__(self, memo):
+        new = type(self)()
+        for x in self:
+            new.append(copy.deepcopy(x, memo))
+        return new
+
 
 class IndexedClassList(IndexedList['WrappedClass']):
     def _index_clear(self):
@@ -132,7 +139,7 @@ class IndexedEnumList(IndexedList['WrappedEnum']):
             self._by_scope_pyname[enum.scope, str(enum.py_name)] = enum
         if not enum.is_scoped:
             for member in enum.members:
-                assert (enum.scope, str(member.py_name)) not in self._unscoped_by_scope_member, f"Duplicate enum member: {member.py_name.name}"
+                assert (enum.scope, str(member.py_name)) not in self._unscoped_by_scope_member, f"Duplicate enum member: {member.py_name} of {enum.fq_cpp_name}"
                 self._unscoped_by_scope_member[enum.scope, str(member.py_name)] = enum
 
     def _index_remove(self, enum):
@@ -219,7 +226,7 @@ class IndexedTypedefList(IndexedList['WrappedTypedef']):
 
     def _index_add(self, typedef):
         name = tuple(typedef.fq_cpp_name._name)
-        assert name not in self._by_fq_cpp_name
+        assert name not in self._by_fq_cpp_name, f"Duplicate typedef name: {name}"
         self._by_fq_cpp_name[name] = typedef
 
     def _index_remove(self, typedef):
